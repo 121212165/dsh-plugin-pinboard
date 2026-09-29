@@ -1,0 +1,10 @@
+# Mounts pinboard into a dsh profile. Needs dsh-system-prompt (already in base profiles).
+- insert:
+    - id: pinboard
+      name: dsh-plugin-pinboard
+      config:
+        enabled: true
+        # dataPath: ~/.dsh/pinboard/pins.jsonl
+        limit: 12      # max pins injected
+        maxChars: 1200  # char budget for those lines
+        order: 700      # prompt section order (tools start at 1000)
