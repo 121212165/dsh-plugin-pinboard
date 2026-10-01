@@ -1,5 +1,7 @@
 # dsh-plugin-pinboard
 
+**EN** · Cross-session pinboard: `/pin` stores a note, and pinned notes ride into every session's system prompt inside a hard budget (`limit` × `maxChars`, section order 700 so tool sections start after 1000); `pin_add` lets the model pin on its own. · 6 `node --test` green · two real headless sessions proved a pin written in session A shows up in session B's prompt log · a bad config (`limit: -1`) fails at boot naming `pinboard` instead of dragging the harness down.
+
 DeepSeek Harness (dsh) 插件：**跨会话置顶便签**。在任何会话里 `/pin` 一次，这条便签就会注入**之后每一个会话**的系统提示——不用重复交代，不用改 agent 配置文件。
 
 适合回答："我怎么让 dsh 永远记住'回答用中文''别动 main 分支'这类长期约定？"
@@ -40,8 +42,21 @@ DeepSeek Harness (dsh) 插件：**跨会话置顶便签**。在任何会话里 `
 
 ## 安装
 
-`npm i dsh-plugin-pinboard`，或克隆后 `npm install`（`prepare` 会构建出 `lib/`）再软链进 profile 的 node_modules；挂载片段见本仓库 `cordis.patch.yml`。需要 profile 里已有 `dsh-system-prompt`（base bundle 自带）。
+三步，实测于 `@deepseek-ai/dsh@0.1.7-alpha.1`（需 `pnpm` 在 PATH 上）：
 
+```sh
+# ① 装进 profile：dsh plugin 把参数原样转发给 pnpm，git 包会自动跑 prepare 构建 lib/
+dsh plugin --profile web add github:121212165/dsh-plugin-pinboard
+```
+
+② 把本仓库根目录 `cordis.patch.yml` 的内容**并进** `$DSH_HOME/profiles/web/cordis.patch.yml`。
+该文件默认是 `[]`，所以要么整份替换，要么把 insert 条目并进同一个数组；**不要直接追加**——
+追加会形成两个 YAML 文档，启动即报
+`failed to parse overlay ... end of the stream or a document separator is expected`（本机实测踩过）。
+
+③ 重启 dsh。配置层与 client 半都要重启才生效（客户端按 boot 时算出的内容 rev 下发，硬刷新浏览器没用）。
+
+自检挂载：`dsh --profile web --dump-config | grep dsh-plugin-pinboard`，应看到该条目。
 ## 验证状态
 
 - 纯函数（增删、去重、ID 递增、容错解析、预算裁剪、截断、列表标注）6 个 `node --test` 全绿。
