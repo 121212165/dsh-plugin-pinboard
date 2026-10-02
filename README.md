@@ -63,3 +63,13 @@ dsh plugin --profile web add github:121212165/dsh-plugin-pinboard
 - 本机 live 验证：两个真实 headless 会话——A 会话由模型调用 `pin_add` 写入便签，B 会话的 `session.v4.jsonl.zstd` 里**系统提示确实包含该段落**（跨会话注入成立）。
 - 非法配置探针：`limit: -1` 时启动失败并点名 `pinboard (dsh-plugin-pinboard): ValidationError`，不会拖垮 harness。
 - 未验证：`/pin` 在 web UI 命令面板里的手动输入体验（headless 无输入通道，验证走的是命令 handler 直接调用）。
+
+## 测试
+
+```bash
+npm run check   # typecheck + node --test + tsc build
+```
+
+13 个测试：6 个纯函数（便签模型/预算裁剪）+ 7 个装配层集成测试（真实 apply() 挂 mock ctx，真临时目录驱动 /pin /unpin /pins、pin_add 工具与提示注入段）。
+
+> 装配层测试 harness 借鉴 dsh-auto-review（222★，PerryLink）的 mountHarness 方法论，node:test 版实现来自 [dsh-plugin-task-forge](https://github.com/121212165/dsh-plugin-task-forge)（本家族首个装配层覆盖的插件）。
