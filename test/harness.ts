@@ -78,7 +78,17 @@ export function makeHarness(): Harness {
     apply(config: Record<string, unknown>) {
       // Schema defaults (limit/maxChars/order) only apply through the host —
       // a direct apply() call gets the plain object, so restate the defaults.
-      applied ??= import('../src/plugin.ts').then(({ apply }) => apply(ctx as never, { enabled: true, limit: 12, maxChars: 1200, order: 700, dataPath, ...config } as never));
+      applied ??= import('../src/plugin.ts').then(({ apply }) => apply(ctx as never, {
+        enabled: true,
+        limit: 12,
+        maxChars: 1200,
+        order: 700,
+        factLimit: 10,
+        // never let a test read the real ~/.dsh/fact-vault/facts.jsonl
+        factsPath: join(dataPath, '..', 'no-fact-vault.jsonl'),
+        dataPath,
+        ...config,
+      } as never));
       return applied;
     },
     command(name: string): CapturedCommand {

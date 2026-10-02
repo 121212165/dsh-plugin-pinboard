@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-pinboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "dsh plugin: cross-session pinboard — pin notes once, injected into every session system prompt; /pin /unpin /pins.",
   "type": "module",
   "license": "MIT",

@@ -26,11 +26,11 @@ test('bad config fails loud naming pinboard; disabled mounts nothing', async () 
   assert.equal(off.sections.length, 0);
 });
 
-test('apply wires three commands, the pin_add tool, and the prompt section', async () => {
+test('apply wires the pin commands, the tools, and the prompt section', async () => {
   const harness = await mounted();
   assert.deepEqual(
     harness.commands.map((command) => command.name).sort(),
-    ['pin', 'pins', 'unpin'],
+    ['facts', 'pin', 'pins', 'unpin'],
   );
   assert.equal(harness.tool('pin_add').name, 'pin_add');
   const section = harness.sections.find((candidate) => candidate.name === 'pinboard');
