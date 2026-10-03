@@ -238,6 +238,13 @@ export function apply(ctx: Context, config: Config): void {
         schema: { type: 'string' } as const,
         render: (_args, value) => [{ type: 'text', text: value }],
       },
+      presentCall: () => ({ card: 'generic' as const, title: '置顶便签', kind: 'edit' as const }),
+      presentResult: (_args, value) => ({
+        card: 'generic' as const,
+        title: String(value).split('\n')[0]!.slice(0, 60),
+        kind: 'edit' as const,
+        rawInput: value,
+      }),
       async execute(args) {
         const result = add(args.text, 'agent');
         if (result.kind === 'empty') return '内容为空，未置顶。';
@@ -261,6 +268,13 @@ export function apply(ctx: Context, config: Config): void {
         schema: { type: 'string' } as const,
         render: (_args, value) => [{ type: 'text', text: value }],
       },
+      presentCall: () => ({ card: 'generic' as const, title: '搜事实库', kind: 'search' as const }),
+      presentResult: (_args, value) => ({
+        card: 'generic' as const,
+        title: String(value).split('\n')[0]!.slice(0, 60),
+        kind: 'search' as const,
+        rawInput: value,
+      }),
       async execute(args) {
         const parsed = parseTags(String(args.query ?? ''));
         return renderFound(findFacts(store.load(), [...parsed.tags, ...parsed.text.split(/\s+/)].join(' ')), config.factLimit);
