@@ -19,6 +19,7 @@ import {
   importFacts,
   isFact,
   parseLibrary,
+  parsePinInput,
   parseTags,
   pinsOfKind,
   removePin,
@@ -91,8 +92,8 @@ export function apply(ctx: Context, config: Config): void {
 
   const add = (raw: string, source: Pin['source'], kind: PinKind = 'pin') => {
     const items = store.load();
-    const parsed = parseTags(raw);
-    const result = addPin(items, parsed.text, source, undefined, { kind, tags: parsed.tags });
+    const parsed = parsePinInput(raw);
+    const result = addPin(items, parsed.text, source, undefined, { kind, tags: parsed.tags, expiresAt: parsed.expiresAt });
     if (result.kind === 'added') store.save(result.items);
     return result;
   };
@@ -114,13 +115,14 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.commands.register({
     name: 'pin',
-    description: '置顶一条便签，注入之后每个会话的系统提示：/pin <一句话> [#标签…]（标签供 /facts find 与筛选共用）',
-    input: { hint: '<一句话> [#标签…]' },
+    description: '置顶一条便签，注入之后每个会话的系统提示：/pin <一句话> [#标签…] [~时长]（~7d/~12h/~2w 设过期，过期自动停止注入）',
+    input: { hint: '<一句话> [#标签…] [~7d]' },
     handler: ({ rawInput }) => {
       const result = add(String(rawInput ?? ''), 'user');
-      if (result.kind === 'empty') return { kind: 'error', text: '便签内容为空。用法：/pin <一句话>' };
+      if (result.kind === 'empty') return { kind: 'error', text: '便签内容为空。用法：/pin <一句话> [#标签…] [~7d]' };
       if (result.kind === 'duplicate') return { kind: 'success', text: `已经置顶过了：${label(result.pin)}` };
-      return { kind: 'success', text: `已置顶 ${label(result.pin)}（下一个回合起注入系统提示；/pins 查看，/unpin ${result.pin.id} 取消）` };
+      const expiry = result.pin.expiresAt ? `，过期时间 ${result.pin.expiresAt.slice(0, 16).replace('T', ' ')}` : '';
+      return { kind: 'success', text: `已置顶 ${label(result.pin)}（下一个回合起注入系统提示${expiry}；/pins 查看，/unpin ${result.pin.id} 取消）` };
     },
   });
 

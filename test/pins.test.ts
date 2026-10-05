@@ -3,6 +3,9 @@ import { test } from 'node:test';
 import {
   addPin,
   removePin,
+  parseExpiry,
+  parsePinInput,
+  parseLine,
   nextId,
   normalizeText,
   parseLibrary,
@@ -102,4 +105,50 @@ test('renderList marks which pins actually get injected', () => {
   assert.ok(text.includes('/unpin')); // overflow warning
   assert.ok(renderList(items, budget).includes('注入 2 条'));
   assert.ok(!renderList(items, budget).includes('/unpin')); // nothing overflowing, no warning
+});
+
+test('parseExpiry reads ~7d/~12h/~2w and leaves plain text (and #tags) alone', () => {
+  const now = new Date('2026-10-05T09:00:00.000Z');
+  const week = parseExpiry('先冻结价格 ~7d', now);
+  assert.equal(week.text, '先冻结价格');
+  assert.equal(week.expiresAt, '2026-10-12T09:00:00.000Z');
+
+  assert.equal(parseExpiry('两小时内交 ~12h', now).expiresAt, '2026-10-05T21:00:00.000Z');
+  assert.equal(parseExpiry('长期有效 ~2w', now).expiresAt, '2026-10-19T09:00:00.000Z');
+  assert.equal(parseExpiry('没有过期这回事', now).expiresAt, undefined);
+  // a bare 7d or an expired-unit token is text, not an expiry
+  assert.equal(parseExpiry('跑 7d 之前先看', now).expiresAt, undefined);
+  assert.equal(parseExpiry('~0d 空数量也是正文', now).text, '~0d 空数量也是正文');
+});
+
+test('parsePinInput composes expiry + tags in one pass', () => {
+  const now = new Date('2026-10-05T09:00:00.000Z');
+  const parsed = parsePinInput('每天站会 #流程 ~7d', now);
+  assert.equal(parsed.text, '每天站会');
+  assert.deepEqual(parsed.tags, ['流程']);
+  assert.equal(parsed.expiresAt, '2026-10-12T09:00:00.000Z');
+});
+
+test('expired pins never inject; /pins marks 临期 and 过期', () => {
+  const now = new Date('2026-10-05T09:00:00.000Z');
+  const budget = { limit: 12, maxChars: 1200 };
+  const items: Pin[] = [
+    { v: 1, id: '1', text: '还在期内的', at: '2026-10-05T00:00:00.000Z', source: 'user', expiresAt: '2026-10-06T00:00:00.000Z' },
+    { v: 1, id: '2', text: '马上到期的', at: '2026-10-05T00:00:00.000Z', source: 'user', expiresAt: '2026-10-05T20:00:00.000Z' },
+    { v: 1, id: '3', text: '已经过期的', at: '2026-10-04T00:00:00.000Z', source: 'user', expiresAt: '2026-10-05T00:00:00.000Z' },
+    { v: 1, id: '4', text: '永久置顶', at: '2026-10-05T00:00:00.000Z', source: 'user' },
+  ];
+
+  const injected = activePins(items, budget, now).map((pin) => pin.id);
+  assert.deepEqual(injected, ['4', '2', '1'], 'newest first, expired filtered out');
+
+  const list = renderList(items, budget, now);
+  assert.ok(list.includes('⏳临期'), list);
+  assert.ok(list.includes('✕已过期'), list);
+  assert.ok(list.includes('已过期便签不再注入'), list);
+  assert.ok(list.includes('1 条已过期'), list);
+
+  // parse tolerance: a broken stamp loses only the expiry, not the pin
+  const parsed = parseLine(JSON.stringify({ v: 1, id: '9', text: '坏时间戳', at: now.toISOString(), source: 'user', expiresAt: 'not-a-date' }))!;
+  assert.equal(parsed.expiresAt, undefined);
 });

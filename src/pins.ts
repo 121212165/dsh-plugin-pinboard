@@ -14,6 +14,9 @@ export interface Pin {
    * — it is found on demand. That consumer is what fact-vault lacked. */
   kind?: PinKind;
   tags?: string[];
+  /** optional expiry (ISO). Optional-in-v1: lines written before expiry existed
+   * simply lack the key, and a malformed stamp only loses the expiry. */
+  expiresAt?: string;
 }
 
 export function isFact(pin: Pin): boolean {
@@ -34,6 +37,43 @@ export function parseTags(raw: string): { text: string; tags: string[] } {
     else words.push(token);
   }
   return { text: normalizeText(words.join(' ')), tags: [...new Set(tags)] };
+}
+
+const EXPIRY_TOKEN = /(?:^|\s)~(\d+)([hdw])(?=\s|$)/;
+const UNIT_MS: Record<string, number> = { h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+
+/** `~7d` / `~12h` / `~2w` anywhere in the input sets an expiry. The `~` prefix
+ * is deliberate: `#` already means tags (facts syntax), and a bare `7d` would
+ * eat real note text. */
+export function parseExpiry(raw: string, now = new Date()): { text: string; expiresAt?: string } {
+  const match = EXPIRY_TOKEN.exec(String(raw ?? ''));
+  if (!match) return { text: normalizeText(raw) };
+  const amount = Number.parseInt(match[1]!, 10);
+  const unit = UNIT_MS[match[2]!];
+  if (!Number.isInteger(amount) || amount <= 0 || !unit) return { text: normalizeText(raw) };
+  const rest = String(raw).replace(EXPIRY_TOKEN, ' ');
+  return { text: normalizeText(rest), expiresAt: new Date(now.getTime() + amount * unit).toISOString() };
+}
+
+/** Full /pin input: expiry token first, then tags. */
+export function parsePinInput(raw: string, now = new Date()): { text: string; tags: string[]; expiresAt?: string } {
+  const { text, expiresAt } = parseExpiry(raw, now);
+  const parsed = parseTags(text);
+  return { text: parsed.text, tags: parsed.tags, expiresAt };
+}
+
+/** An expired pin stops being injected the moment the clock passes its stamp. */
+export function isExpired(pin: Pin, now = new Date()): boolean {
+  if (pin.expiresAt === undefined) return false;
+  const at = Date.parse(pin.expiresAt);
+  return Number.isFinite(at) && at <= now.getTime();
+}
+
+/** 临期 = inside its last 24 hours (or already past, for display). */
+export function isExpiringSoon(pin: Pin, now = new Date(), withinMs = 86_400_000): boolean {
+  if (pin.expiresAt === undefined) return false;
+  const at = Date.parse(pin.expiresAt);
+  return Number.isFinite(at) && at - now.getTime() <= withinMs;
 }
 
 export interface PromptBudget {
@@ -60,14 +100,14 @@ export type AddResult = { kind: 'empty' } | { kind: 'duplicate'; pin: Pin } | { 
 
 /** Facts and pins share the library but not the dedup space: the same sentence
  * may legitimately be both a standing instruction and a stored fact. */
-export function addPin(items: Pin[], text: string, source: Pin['source'], at = new Date().toISOString(), extra: { kind?: PinKind; tags?: string[] } = {}): AddResult {
+export function addPin(items: Pin[], text: string, source: Pin['source'], at = new Date().toISOString(), extra: { kind?: PinKind; tags?: string[]; expiresAt?: string } = {}): AddResult {
   const clean = normalizeText(text);
   if (!clean) return { kind: 'empty' };
   const kind: PinKind = extra.kind ?? 'pin';
   const existing = items.find((item) => item.text === clean && (item.kind ?? 'pin') === kind);
   if (existing) return { kind: 'duplicate', pin: existing };
   const tags = [...new Set((extra.tags ?? []).map((tag) => tag.toLowerCase()).filter(Boolean))];
-  const pin: Pin = { v: 1, id: nextId(items), text: clean, at, source, ...(kind === 'fact' ? { kind } : {}), ...(tags.length ? { tags } : {}) };
+  const pin: Pin = { v: 1, id: nextId(items), text: clean, at, source, ...(kind === 'fact' ? { kind } : {}), ...(tags.length ? { tags } : {}), ...(extra.expiresAt ? { expiresAt: extra.expiresAt } : {}) };
   return { kind: 'added', pin, items: [...items, pin] };
 }
 
@@ -101,6 +141,8 @@ export function parseLine(line: string): Pin | null {
   const pin = value as unknown as Pin;
   // malformed tags only lose the tags; the note itself is still worth keeping.
   if (pin.tags !== undefined && (!Array.isArray(pin.tags) || !pin.tags.every((tag) => typeof tag === 'string'))) delete pin.tags;
+  // same tolerance for expiry: an unparseable stamp must not reject the line
+  if (pin.expiresAt !== undefined && !Number.isFinite(Date.parse(pin.expiresAt))) delete pin.expiresAt;
   return pin;
 }
 
@@ -126,11 +168,13 @@ export function lineFor(pin: Pin): string {
 
 /** Pins that fit the budget: at most `limit`, and only while the pinned lines
  * stay within `maxChars` (joined with newlines). A single oversized pin is
- * truncated rather than dropped, so the newest note always reaches the prompt. */
-export function activePins(items: Pin[], budget: PromptBudget): Pin[] {
+ * truncated rather than dropped, so the newest note always reaches the prompt.
+ * Expired pins never inject — the clock, not the budget, decides those. */
+export function activePins(items: Pin[], budget: PromptBudget, now = new Date()): Pin[] {
   const out: Pin[] = [];
   let used = 0;
   for (const pin of byRecency(pinsOfKind(items, 'pin'))) {
+    if (isExpired(pin, now)) continue;
     if (out.length >= budget.limit) break;
     const remaining = budget.maxChars - used - (out.length ? 1 : 0);
     if (remaining < 3) break;
@@ -154,24 +198,36 @@ export function renderSection(items: Pin[], budget: PromptBudget): string {
   return [SECTION_HEADER, '用户置顶的持久指令，跨所有会话生效，优先于临时对话中的同类约定：', ...active.map(lineFor)].join('\n');
 }
 
-export function usedChars(items: Pin[], budget: PromptBudget): number {
-  return activePins(items, budget).reduce((total, pin) => total + lineFor(pin).length + 1, 0);
+export function usedChars(items: Pin[], budget: PromptBudget, now = new Date()): number {
+  return activePins(items, budget, now).reduce((total, pin) => total + lineFor(pin).length + 1, 0);
 }
 
 export function tagSuffix(pin: Pin): string {
   return pin.tags?.length ? `  #${pin.tags.join(' #')}` : '';
 }
 
-export function renderList(items: Pin[], budget: PromptBudget): string {
+/** /pins display suffix: what expires when, with a mark when it already has or
+ * is about to (last 24h). Pins without expiry say nothing. */
+export function expiryMark(pin: Pin, now = new Date()): string {
+  if (pin.expiresAt === undefined) return '';
+  const at = Date.parse(pin.expiresAt);
+  if (!Number.isFinite(at)) return '';
+  const day = pin.expiresAt.slice(0, 10);
+  if (at <= now.getTime()) return ` ✕已过期(至${day})`;
+  return isExpiringSoon(pin, now) ? ` ⏳临期(至${day})` : ` ~(至${day})`;
+}
+
+export function renderList(items: Pin[], budget: PromptBudget, now = new Date()): string {
   const pins = pinsOfKind(items, 'pin');
   const facts = pinsOfKind(items, 'fact');
   if (!items.length) return '便签板是空的。/pin <一句话> 置顶第一条（会注入每个会话的系统提示）；/facts save <事实 #标签> 存进事实库（不注入，用 /facts find 查）。';
-  const activeIds = new Set(activePins(items, budget).map((pin) => pin.id));
+  const activeIds = new Set(activePins(items, budget, now).map((pin) => pin.id));
+  const expired = pins.filter((pin) => isExpired(pin, now)).length;
   const lines = byRecency(items)
     .slice(0, 30)
-    .map((pin) => `  ${isFact(pin) ? '◆' : activeIds.has(pin.id) ? '●' : '○'} [#${pin.id}] ${pin.text}${tagSuffix(pin)}  (${pin.source} · ${pin.at.slice(0, 10)})`);
-  const summary = `便签 ${pins.length} 条（注入 ${activeIds.size} 条，${usedChars(items, budget)}/${budget.maxChars} 字符，上限 ${budget.limit} 条）· 事实库 ${facts.length} 条（不注入）`;
-  const hint = pins.length > activeIds.size ? '\n○ 的便签因超出字符/条数上限未注入——/unpin <id> 清理旧的。' : '';
+    .map((pin) => `  ${isFact(pin) ? '◆' : isExpired(pin, now) ? '✕' : activeIds.has(pin.id) ? '●' : '○'} [#${pin.id}] ${pin.text}${tagSuffix(pin)}${expiryMark(pin, now)}  (${pin.source} · ${pin.at.slice(0, 10)})`);
+  const summary = `便签 ${pins.length} 条（注入 ${activeIds.size} 条，${usedChars(items, budget, now)}/${budget.maxChars} 字符，上限 ${budget.limit} 条${expired ? `，${expired} 条已过期` : ''}）· 事实库 ${facts.length} 条（不注入）`;
+  const hint = expired ? '\n✕ 已过期便签不再注入，/unpin <id> 清掉。' : pins.length > activeIds.size ? '\n○ 的便签因超出字符/条数上限未注入——/unpin <id> 清理旧的。' : '';
   return [summary, ...lines].join('\n') + hint;
 }
 
