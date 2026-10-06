@@ -1,5 +1,8 @@
 # dsh-plugin-pinboard
 
+> 🧩 **dsh 插件家族**（22 件）：总目录 **[dsh-plugin-family](https://github.com/121212165/dsh-plugin-family)** ｜ 明星插件：**[ide-hub](https://github.com/121212165/dsh-plugin-ide-hub)** 跨 IDE 统一管理 · **[task-forge](https://github.com/121212165/dsh-plugin-task-forge)** 跨窗口无损交接 · **[quota](https://github.com/121212165/dsh-plugin-quota)** 实时用量仪表
+
+
 **EN** · Cross-session pinboard: `/pin` stores a note, and pinned notes ride into every session's system prompt inside a hard budget (`limit` × `maxChars`, section order 700 so tool sections start after 1000); `pin_add` lets the model pin on its own. Since v0.2 it also carries fact-vault's searchable library (`/facts`, `fact_search`) — stored in the same file, tagged, and deliberately never injected. · 22 `node --test` green · two real headless sessions proved a pin written in session A shows up in session B's prompt log · a bad config (`limit: -1`) fails at boot naming `pinboard` instead of dragging the harness down.
 
 DeepSeek Harness (dsh) 插件：**跨会话置顶便签**。在任何会话里 `/pin` 一次，这条便签就会注入**之后每一个会话**的系统提示——不用重复交代，不用改 agent 配置文件。
