@@ -8,9 +8,9 @@ import Schema from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type {} from '@deepseek-ai/dsh-commands';
 import type {} from '@deepseek-ai/dsh-system-prompt';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   addPin,
@@ -27,6 +27,7 @@ import {
   renderList,
   renderSection,
   tagSuffix,
+  type AddResult,
   type ImportRow,
   type Pin,
   type PinKind,
@@ -62,8 +63,45 @@ export function expandHome(path: string): string {
   return path.startsWith('~') ? join(homedir(), path.slice(1)) : path;
 }
 
+export const LOCK_TIMEOUT_MS = 400;
+export const LOCK_STALE_MS = 5000;
+export { addPin };
+
+/** Exclusive-create advisory lock. `EEXIST` means someone holds it: spin until
+ * the deadline, take over a stale older than LOCK_STALE_MS. Any other open
+ * error (and the deadline) degrade to "proceed unlocked" — availability first,
+ * a conflicted saved file has its bad lines tolerated by parse. */
+export function acquireLock(lockPath: string): boolean {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lockPath, 'wx'));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return true;
+      if (Date.now() >= deadline) return false;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch {
+        // vanished or lost the takeover race — retry the create instead
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+
+function releaseLock(lockPath: string): void {
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    // a stale-lock taker who lost the re-create race removes nothing
+  }
+}
+
 export class PinStore {
   readonly path: string;
+  /** set by apply() so lock degradation is visible in the plugin log */
+  warn?: (message: string) => void;
 
   constructor(dataPath: string | undefined) {
     this.path = dataPath ? expandHome(dataPath) : join(homedir(), '.dsh', 'pinboard', 'pins.jsonl');
@@ -75,9 +113,25 @@ export class PinStore {
   }
 
   save(items: Pin[]): void {
-    const index = Math.max(this.path.lastIndexOf('/'), this.path.lastIndexOf('\\'));
-    mkdirSync(index === -1 ? '.' : this.path.slice(0, index), { recursive: true });
-    writeFileSync(this.path, items.map((item) => JSON.stringify(item)).join('\n') + '\n', 'utf8');
+    mkdirSync(dirname(this.path), { recursive: true });
+    // temp+rename: concurrent readers and a crash mid-write never see a torn file
+    const tmp = join(dirname(this.path), `.pins-${process.pid}-${Date.now()}.tmp`);
+    writeFileSync(tmp, items.map((item) => JSON.stringify(item)).join('\n') + '\n', 'utf8');
+    renameSync(tmp, this.path);
+  }
+
+  /** The one write path: load-modify-write under the lock, with a re-read
+   * after acquiring it, so each of N concurrent processes keeps its line. */
+  mutate(fn: (items: Pin[]) => Pin[]): void {
+    mkdirSync(dirname(this.path), { recursive: true });
+    const lockPath = `${this.path}.lock`;
+    const locked = acquireLock(lockPath);
+    if (!locked) this.warn?.('pinboard lock busy — saved without lock');
+    try {
+      this.save(fn(this.load()));
+    } finally {
+      if (locked) releaseLock(lockPath);
+    }
   }
 }
 
@@ -88,13 +142,16 @@ export function apply(ctx: Context, config: Config): void {
   if (!Number.isInteger(config.factLimit) || config.factLimit < 1) throw new TypeError('pinboard: factLimit must be a positive integer');
   if (typeof config.factsPath !== 'string' || !config.factsPath.trim()) throw new TypeError('pinboard: factsPath must be a non-empty string');
   const store = new PinStore(config.dataPath);
+  store.warn = (message) => log.warn(message);
   const budget: PromptBudget = { limit: config.limit, maxChars: config.maxChars };
 
-  const add = (raw: string, source: Pin['source'], kind: PinKind = 'pin') => {
-    const items = store.load();
-    const parsed = parsePinInput(raw);
-    const result = addPin(items, parsed.text, source, undefined, { kind, tags: parsed.tags, expiresAt: parsed.expiresAt });
-    if (result.kind === 'added') store.save(result.items);
+  const add = (raw: string, source: Pin['source'], kind: PinKind = 'pin'): AddResult => {
+    let result!: AddResult;
+    store.mutate((items) => {
+      const parsed = parsePinInput(raw);
+      result = addPin(items, parsed.text, source, undefined, { kind, tags: parsed.tags, expiresAt: parsed.expiresAt });
+      return result.kind === 'added' ? result.items : items;
+    });
     return result;
   };
 
@@ -133,10 +190,13 @@ export function apply(ctx: Context, config: Config): void {
     handler: ({ rawInput }) => {
       const id = String(rawInput ?? '').trim();
       if (!id) return { kind: 'error', text: '用法：/unpin <id>（id 见 /pins）' };
-      const items = store.load();
-      const { items: kept, removed } = removePin(items, id);
+      let removed: Pin | null = null;
+      store.mutate((items) => {
+        const { items: kept, removed: hit } = removePin(items, id);
+        removed = hit;
+        return kept;
+      });
       if (!removed) return { kind: 'error', text: `没有 [#${id}]，/pins 看现有便签` };
-      store.save(kept);
       return { kind: 'success', text: `已取消 ${label(removed)}` };
     },
   });
@@ -187,9 +247,12 @@ export function apply(ctx: Context, config: Config): void {
       if (verb === 'rm') {
         const id = rest[0] ?? '';
         if (!id) return { kind: 'error', text: '用法：/facts rm <id>（id 见 /facts list）' };
-        const target = items.find((pin) => pin.id === id.replace(/^#/, '') && isFact(pin));
+        let target: Pin | undefined;
+        store.mutate((items) => {
+          target = items.find((pin) => pin.id === id.replace(/^#/, '') && isFact(pin));
+          return target ? removePin(items, target.id).items : items;
+        });
         if (!target) return { kind: 'error', text: `事实库里没有 #${id}（便签请用 /unpin）` };
-        store.save(removePin(items, target.id).items);
         return { kind: 'success', text: `已从事实库删除 ${label(target)}` };
       }
       if (verb === 'import') {
@@ -217,8 +280,11 @@ export function apply(ctx: Context, config: Config): void {
             broken++;
           }
         }
-        const merged = importFacts(items, rows);
-        store.save(merged.items);
+        let merged!: ReturnType<typeof importFacts>;
+        store.mutate((items) => {
+          merged = importFacts(items, rows);
+          return merged.items;
+        });
         return {
           kind: 'success',
           text: `从 ${source} 导入：新增 ${merged.added} 条 · 重复跳过 ${merged.duplicates} 条 · 坏行 ${broken + merged.skipped} 条。` +
