@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { makeHarness, type Harness } from './harness.ts';
-import { activePins, findFacts, importFacts, isFact, parseTags, addPin, pinsOfKind, removePin, tagSuffix } from '../src/pins.ts';
+import { activePins, findFacts, importFacts, isFact, parseTags, addPin, pinsOfKind, tagSuffix } from '../src/pins.ts';
 
 async function mounted(config: Record<string, unknown> = {}): Promise<Harness> {
   const harness = makeHarness();

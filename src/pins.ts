@@ -56,7 +56,7 @@ export function parseExpiry(raw: string, now = new Date()): { text: string; expi
 }
 
 /** Full /pin input: expiry token first, then tags. */
-export function parsePinInput(raw: string, now = new Date()): { text: string; tags: string[]; expiresAt?: string } {
+export function parsePinInput(raw: string, now = new Date()): { text: string; tags: string[]; expiresAt?: string | undefined } {
   const { text, expiresAt } = parseExpiry(raw, now);
   const parsed = parseTags(text);
   return { text: parsed.text, tags: parsed.tags, expiresAt };
@@ -100,7 +100,7 @@ export type AddResult = { kind: 'empty' } | { kind: 'duplicate'; pin: Pin } | { 
 
 /** Facts and pins share the library but not the dedup space: the same sentence
  * may legitimately be both a standing instruction and a stored fact. */
-export function addPin(items: Pin[], text: string, source: Pin['source'], at = new Date().toISOString(), extra: { kind?: PinKind; tags?: string[]; expiresAt?: string } = {}): AddResult {
+export function addPin(items: Pin[], text: string, source: Pin['source'], at = new Date().toISOString(), extra: { kind?: PinKind; tags?: string[] | undefined; expiresAt?: string | undefined } = {}): AddResult {
   const clean = normalizeText(text);
   if (!clean) return { kind: 'empty' };
   const kind: PinKind = extra.kind ?? 'pin';
@@ -266,8 +266,8 @@ export function renderFound(scored: ScoredPin[], limit: number): string {
 /** One-time migration from dsh-plugin-fact-vault's facts.jsonl shape. */
 export interface ImportRow {
   text: string;
-  tags?: string[];
-  at?: string;
+  tags?: string[] | undefined;
+  at?: string | undefined;
 }
 
 export function importFacts(items: Pin[], rows: ImportRow[], now = new Date().toISOString()): { items: Pin[]; added: number; duplicates: number; skipped: number } {
