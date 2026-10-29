@@ -1,14 +1,13 @@
 /** Assembly-layer harness for pinboard: a scripted mock dsh context that the
  * real apply() wires against. Captures command/tool registrations and the
  * system-prompt section provider so tests can pin notes and watch them reach
- * the prompt over a real temp directory. Methodology: dsh-auto-review's
- * mountHarness (222★), node:test port by dsh-plugin-task-forge.
+ * the prompt over a real temp directory. The mock itself lives in
+ * @dsh-family/kit; this file adds pinboard's config defaults.
  * @module test/harness */
 
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after } from 'node:test';
+
+import { applyOnce, createMockCtx, tempDir } from '@dsh-family/kit/kit/test-harness';
 
 export interface CapturedCommand {
   name: string;
@@ -39,73 +38,44 @@ export interface Harness {
 }
 
 export function makeHarness(): Harness {
-  const commands: CapturedCommand[] = [];
-  const tools: CapturedTool[] = [];
-  const sections: CapturedSection[] = [];
-
-  const ctx = {
-    logger(_name: string) {
-      return { info() {}, warn() {} };
-    },
-    commands: {
-      register(definition: CapturedCommand) {
-        commands.push(definition);
-      },
-    },
-    tools: {
-      register(definition: CapturedTool) {
-        tools.push(definition);
-      },
-    },
-    systemPrompt: {
-      section(section: CapturedSection) {
-        sections.push(section);
-      },
-    },
-  };
-
-  const dataPath = join(mkdtempSync(join(tmpdir(), 'pinboard-wire-')), 'pins.jsonl');
-  after(() => rmSync(join(dataPath, '..'), { recursive: true, force: true }));
+  const mock = createMockCtx<CapturedCommand, CapturedTool, CapturedSection>();
+  const dataPath = join(tempDir('pinboard-wire-'), 'pins.jsonl');
 
   // apply once per harness — a second call would double-register.
-  let applied: Promise<void> | null = null;
+  // Schema defaults (limit/maxChars/order) only apply through the host —
+  // a direct apply() call gets the plain object, so restate the defaults.
+  let pending: Record<string, unknown> = {};
+  let mounted = false;
+  const applied = applyOnce(() =>
+    import('../src/plugin.ts').then(({ apply }) => apply(mock.ctx as never, {
+      enabled: true,
+      limit: 12,
+      maxChars: 1200,
+      order: 700,
+      factLimit: 10,
+      // never let a test read the real ~/.dsh/fact-vault/facts.jsonl
+      factsPath: join(dataPath, '..', 'no-fact-vault.jsonl'),
+      dataPath,
+      ...pending,
+    } as never)),
+  );
 
-  const harness: Harness = {
-    commands,
-    tools,
-    sections,
+  return {
+    commands: mock.commands,
+    tools: mock.tools,
+    sections: mock.sections,
     dataPath,
     apply(config: Record<string, unknown>) {
-      // Schema defaults (limit/maxChars/order) only apply through the host —
-      // a direct apply() call gets the plain object, so restate the defaults.
-      applied ??= import('../src/plugin.ts').then(({ apply }) => apply(ctx as never, {
-        enabled: true,
-        limit: 12,
-        maxChars: 1200,
-        order: 700,
-        factLimit: 10,
-        // never let a test read the real ~/.dsh/fact-vault/facts.jsonl
-        factsPath: join(dataPath, '..', 'no-fact-vault.jsonl'),
-        dataPath,
-        ...config,
-      } as never));
-      return applied;
+      if (!mounted) {
+        mounted = true;
+        pending = config;
+      }
+      return applied();
     },
-    command(name: string): CapturedCommand {
-      const found = commands.find((candidate) => candidate.name === name);
-      if (!found) throw new Error(`command ${name} was never registered`);
-      return found;
-    },
-    tool(name: string): CapturedTool {
-      const found = tools.find((candidate) => candidate.name === name);
-      if (!found) throw new Error(`tool ${name} was never registered`);
-      return found;
-    },
+    command: mock.command,
+    tool: mock.tool,
     sectionText(): string {
-      const found = sections.find((candidate) => candidate.name === 'pinboard');
-      if (!found) throw new Error('pinboard section was never registered');
-      return found.text();
+      return mock.section('pinboard').text();
     },
   };
-  return harness;
 }
