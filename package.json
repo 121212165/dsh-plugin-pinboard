@@ -27,6 +27,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "catalog": {
+      "category": "会话与知识库",
+      "blurb": "置顶便签注入系统提示：中途加便签下一回合生效，不用重启",
+      "entries": "`/pin` `/pins` `pin_add`"
     }
   },
   "engines": {
