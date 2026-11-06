@@ -19,23 +19,23 @@ export interface Config {
     maxChars: number;
     order: number;
 }
-export declare const Config: Schema<Schemastery.ObjectS<{
-    enabled: Schema<boolean, boolean>;
-    dataPath: Schema<string, string>;
-    factLimit: Schema<number, number>;
-    factsPath: Schema<string, string>;
-    limit: Schema<number, number>;
-    maxChars: Schema<number, number>;
-    order: Schema<number, number>;
-}>, Schemastery.ObjectT<{
-    enabled: Schema<boolean, boolean>;
-    dataPath: Schema<string, string>;
-    factLimit: Schema<number, number>;
-    factsPath: Schema<string, string>;
-    limit: Schema<number, number>;
-    maxChars: Schema<number, number>;
-    order: Schema<number, number>;
-}>>;
+export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
+    enabled: Schema<boolean, boolean, "defined">;
+    dataPath: Schema<string, string, "plain">;
+    factLimit: Schema<number, number, "defined">;
+    factsPath: Schema<string, string, "defined">;
+    limit: Schema<number, number, "defined">;
+    maxChars: Schema<number, number, "defined">;
+    order: Schema<number, number, "defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    enabled: Schema<boolean, boolean, "defined">;
+    dataPath: Schema<string, string, "plain">;
+    factLimit: Schema<number, number, "defined">;
+    factsPath: Schema<string, string, "defined">;
+    limit: Schema<number, number, "defined">;
+    maxChars: Schema<number, number, "defined">;
+    order: Schema<number, number, "defined">;
+}>>, "plain">;
 export declare function expandHome(path: string): string;
 export declare const LOCK_TIMEOUT_MS = 400;
 export declare const LOCK_STALE_MS = 5000;
