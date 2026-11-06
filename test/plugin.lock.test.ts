@@ -39,7 +39,7 @@ test('mutate adds under a clean lock and removes the lock afterwards', () => {
 
 test('8 concurrent child processes each keep their pin line', async () => {
   const store = newStore();
-  const markers = Array.from({ length: 8 }, (_, index) => `LOCK-C${index + 1}-${Date.now().toString(36)}`);
+  const markers = Array.from({ length: 8 }, (_, index) => `LOCK-C${index + 1}`);
   const children = markers.map((marker) =>
     spawn(process.execPath, [join(import.meta.dirname, 'mutate-worker.mjs'), store.path, marker], { stdio: 'pipe' }),
   );
@@ -55,27 +55,35 @@ test('8 concurrent child processes each keep their pin line', async () => {
   for (const marker of markers) assert.ok(text.includes(marker), `missing ${marker}`);
 });
 
-test('a stale lock is taken over', () => {
+test('a stale lock is taken over', (t) => {
+  const now = Date.parse('2026-11-06T00:00:00.000Z');
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(Atomics, 'wait', () => 'timed-out' as const);
   const store = newStore();
   const lockPath = `${store.path}.lock`;
   writeFileSync(lockPath, 'held by a dead process');
-  const old = new Date(Date.now() - LOCK_STALE_MS - 1000);
+  const old = new Date(now - LOCK_STALE_MS - 1000);
   utimesSync(lockPath, old, old);
   store.mutate(writeThrough('接管陈锁后的便签'));
   assert.ok(store.load().some((pin) => pin.text === '接管陈锁后的便签'));
   assert.ok(!existsSync(lockPath), 'stale lock must not survive');
 });
 
-test('a fresh foreign lock degrades after the deadline and is left alone', () => {
+test('a fresh foreign lock degrades after the deadline and is left alone', (t) => {
+  const start = Date.parse('2026-11-06T00:00:00.000Z');
+  let now = start;
+  t.mock.method(Date, 'now', () => now);
+  const wait = t.mock.method(Atomics, 'wait', () => { now += 10; return 'timed-out' as const; });
   const store = newStore();
   const lockPath = `${store.path}.lock`;
   writeFileSync(lockPath, 'held by a live process');
+  utimesSync(lockPath, new Date(start), new Date(start));
   try {
     let warned = '';
     store.warn = (message) => { warned = message; };
-    const start = Date.now();
     store.mutate(writeThrough('降级直写的便签'));
-    assert.ok(Date.now() - start >= LOCK_TIMEOUT_MS - 20, 'must wait out the deadline');
+    assert.equal(now - start, LOCK_TIMEOUT_MS, 'must wait out the deadline');
+    assert.equal(wait.mock.callCount(), LOCK_TIMEOUT_MS / 10);
     assert.match(warned, /lock busy/);
     assert.ok(store.load().some((pin) => pin.text === '降级直写的便签'));
     assert.ok(existsSync(lockPath), 'degraded save must not delete a foreign lock');
